@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans:beans xmlns="http://www.springframework.org/schema/batch"
+             xmlns:beans="http://www.springframework.org/schema/beans"
+	         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:p="http://www.springframework.org/schema/p"
+             xmlns:c="http://www.springframework.org/schema/c"
+  	         xsi:schemaLocation="http://www.springframework.org/schema/batch http://www.springframework.org/schema/batch/spring-batch-2.1.xsd
+  	                             http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.1.xsd">
+     
+    <!-- START of NEW audit data purge job and supporting beans --> 
+    <job id="auditDataPurgeViaPartitioning">
+    
+        <validator>
+            <beans:bean id="jobParmsValidator" class="org.springframework.batch.core.job.DefaultJobParametersValidator" 
+                        p:requiredKeys="commit.interval,max.number.of.recent.partitions.to.keep,name.of.partitioned.table" />
+        </validator>
+         
+        <step id="findAndDropOldPartitions">
+          <tasklet>
+            <chunk reader="oldPartitionReader" writer="partitionDropWriter" commit-interval="#{jobParameters['commit.interval']}" />
+          </tasklet>
+        </step>
+         
+    </job>
+    <beans:bean id="oldPartitionReader" class="org.springframework.batch.item.database.JdbcCursorItemReader" scope="step"
+                p:dataSource-ref="dataSource" 
+                p:sql="${partitions.to.drop.query.sql}"
+                p:rowMapper-ref="partitionInfoRowMapper"
+                p:preparedStatementSetter-ref="partitionsToDropQueryPreparedStatementSetter"
+    />
+    <beans:bean id="partitionInfoRowMapper" class="com.gap.gid.icm.batch.audit.purge.PartitionInfoRowMapper" />
+
+    <beans:bean id="partitionsToDropQueryPreparedStatementSetter" class="com.gap.gid.icm.batch.audit.purge.PartitionsToDropQueryPreparedStatementSetter"
+                c:partitionedTableName="#{jobParameters['name.of.partitioned.table']}" 
+                c:maxNbrOfRecentPartitionsToKeep="#{jobParameters['max.number.of.recent.partitions.to.keep']}" 
+                scope="step" />
+
+    <beans:bean id="partitionDropWriter" class="com.gap.gid.icm.batch.audit.purge.PartitionDropWriter"
+                c:partitionedTableName="#{jobParameters['name.of.partitioned.table']}"
+                p:jdbcTemplate-ref="jdbcTemplate"
+                scope="step" />
+
+    <!-- END of NEW audit data purge job and supporting beans -->
+
+
+
+
+
+    <!-- START of DEPRECATED audit data purge job and supporting beans -->
+	<job id="auditDataPurge">
+	
+  		<step id="dcSkuAuditRecordsToPurgeMaster" next="globalSkuAuditRecordsToPurgeMaster">
+			<partition step="dcSkuAuditRecordsToPurgeSlave" handler="dcSkuAuditRecordsToPurgeHandler" partitioner="dcSkuAuditRecordsToPurgePartitioner"/>
+		</step>
+		
+  		<step id="globalSkuAuditRecordsToPurgeMaster">
+			<partition step="globalSkuAuditRecordsToPurgeSlave" handler="globalSkuAuditRecordsToPurgeHandler" partitioner="globalSkuAuditRecordsToPurgePartitioner"/>
+		</step>
+
+	</job>
+	
+
+	<!-- Shared Slave Step Supporting Beans -->
+	<beans:bean id="slaveStepTaskExecutor" class="org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor" scope="step">
+	    <beans:property name="corePoolSize" value="#{jobParameters['sku.workers.gridsize']}"/>
+	    <beans:property name="waitForTasksToCompleteOnShutdown" value="true"/>
+	</beans:bean>
+	<beans:bean id="skuRangeReader" class="com.gap.gid.icm.batch.audit.purge.SkuRangeReader" scope="step"/>
+	<beans:bean id="toStringWriter" class="com.gap.gid.icm.batch.audit.purge.ToStringWriter" scope="step" />
+	
+	
+	
+	<!-- DC-SKU Slave Step Supporting Beans -->
+ 	<step id="dcSkuAuditRecordsToPurgeSlave">
+ 		<tasklet>
+			<chunk reader="skuRangeReader" writer="dcSkuAuditRecordsToPurgeCompositeWriter" commit-interval="#{jobParameters['sku.worker.commit.interval']}" />
+		</tasklet>
+		<listeners>
+			<listener ref="skuRangeReader" />
+		</listeners>
+	</step>
+	
+	<!-- We are only using this long-form of the handler def vs the inline one so that we can dynamically set grid size -->
+	<beans:bean id="dcSkuAuditRecordsToPurgeHandler" class="org.springframework.batch.core.partition.support.TaskExecutorPartitionHandler" scope="step">
+		<beans:property name="taskExecutor" ref="slaveStepTaskExecutor" />
+		<beans:property name="step" ref="dcSkuAuditRecordsToPurgeSlave" />
+		<beans:property name="gridSize" value="#{jobParameters['sku.workers.gridsize']}" />
+	</beans:bean>
+	
+ 	<beans:bean id="dcSkuAuditRecordsToPurgePartitioner" class="com.gap.gid.icm.batch.audit.purge.DcSkuAuditRecordsPartitioner" scope="step">
+ 	    <beans:property name="jdbcTemplate" ref="jdbcTemplate"/>
+ 	    <beans:property name="partitionPrefix" value="dcSkuAuditRecordsPurge" />
+ 	    <beans:property name="numberOfDaysToKeepAuditRecordsFor" value="#{jobParameters['nbr.of.days.to.keep.audit.data.for']}"/>
+        <beans:property name="hardLimit" value="#{jobParameters['hard.limit']}"/>
+ 	</beans:bean>
+
+ 	<beans:bean id="dcSkuAuditRecordsToPurgeCompositeWriter" class="org.springframework.batch.item.support.CompositeItemWriter" scope="step">
+		<beans:property name="delegates">
+			<beans:list>
+			   <beans:ref bean="toStringWriter" />
+			   <beans:ref bean="dcSkuAuditRecordsPurger" />
+			</beans:list>
+		</beans:property>
+	</beans:bean>
+	
+	<beans:bean id="dcSkuAuditRecordsPurger" class="com.gap.gid.icm.batch.audit.purge.AuditRecordsPurger" scope="step">
+		<beans:property name="jdbcTemplate" ref="jdbcTemplate"/>
+		<beans:property name="sql" value="${dc.sku.audit.purge.sql}" />
+	</beans:bean> 
+	
+	
+	
+	<!-- GLOBAL-SKU Slave Step Supporting Beans -->
+ 	<step id="globalSkuAuditRecordsToPurgeSlave">
+ 		<tasklet>
+			<chunk reader="skuRangeReader" writer="globalSkuAuditRecordsToPurgeCompositeWriter" commit-interval="#{jobParameters['sku.worker.commit.interval']}" />
+		</tasklet>
+		<listeners>
+			<listener ref="skuRangeReader" />
+		</listeners>
+	</step>
+	
+	<!-- We are only using this long-form of the handler def vs the inline one so that we can dynamically set grid size -->
+	<beans:bean id="globalSkuAuditRecordsToPurgeHandler" class="org.springframework.batch.core.partition.support.TaskExecutorPartitionHandler" scope="step">
+		<beans:property name="taskExecutor" ref="slaveStepTaskExecutor" />
+		<beans:property name="step" ref="globalSkuAuditRecordsToPurgeSlave" />
+		<beans:property name="gridSize" value="#{jobParameters['sku.workers.gridsize']}" />
+	</beans:bean>
+	
+ 	<beans:bean id="globalSkuAuditRecordsToPurgePartitioner" class="com.gap.gid.icm.batch.audit.purge.GlobalSkuAuditRecordsPartitioner" scope="step">
+ 	    <beans:property name="jdbcTemplate" ref="jdbcTemplate"/>
+ 	    <beans:property name="partitionPrefix" value="globalSkuAuditRecordsPurge" />
+ 	    <beans:property name="numberOfDaysToKeepAuditRecordsFor" value="#{jobParameters['nbr.of.days.to.keep.audit.data.for']}"/>
+        <beans:property name="hardLimit" value="#{jobParameters['hard.limit']}"/>
+ 	</beans:bean>
+
+ 	<beans:bean id="globalSkuAuditRecordsToPurgeCompositeWriter" class="org.springframework.batch.item.support.CompositeItemWriter" scope="step">
+		<beans:property name="delegates">
+			<beans:list>
+			   <beans:ref bean="toStringWriter" />
+			   <beans:ref bean="globalSkuAuditRecordsPurger" />
+			</beans:list>
+		</beans:property>
+	</beans:bean>
+	
+	<beans:bean id="globalSkuAuditRecordsPurger" class="com.gap.gid.icm.batch.audit.purge.AuditRecordsPurger" scope="step">
+		<beans:property name="jdbcTemplate" ref="jdbcTemplate" />
+		<beans:property name="sql" value="${glbl.sku.audit.purge.sql}" />
+	</beans:bean> 
+  
+  <!-- END of DEPRECATED audit data purge job and supporting beans -->
+	
+</beans:beans>

@@ -1,0 +1,21 @@
+plugins {
+    id 'java'
+    id 'war'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // TODO: Added matching spring web mvc to make resync API wrapper work with the Resync batch
+    annotationProcessor "org.projectlombok:lombok:1.14.4"
+    compile group: 'org.springframework', name: 'spring-webmvc', version: '3.1.1.RELEASE'
+    compile group: 'org.springframework', name: 'spring-web', version: '3.1.1.RELEASE'
+    compile group: 'org.springframework.batch', name: 'spring-batch-infrastructure', version: '2.1.8.RELEASE'
+    compile group: 'org.springframework.batch', name: 'spring-batch-core', version: '2.1.8.RELEASE'
+    compile "org.projectlombok:lombok:1.14.4"
+    compile files('/Users/in-varun.shrivastava/Gap/github.com/Resync/AuditDataPurgeBatch/build/libs/AuditDataPurgeBatch-0.0.289.0.jar')
+
+    providedCompile group: 'javax.servlet', name: 'javax.servlet-api', version: '3.1.0'
+}

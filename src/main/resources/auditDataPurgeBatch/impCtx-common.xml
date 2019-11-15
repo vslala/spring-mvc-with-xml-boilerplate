@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	   xmlns:context="http://www.springframework.org/schema/context"
+       xmlns:batch="http://www.springframework.org/schema/batch"
+	   xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.1.xsd
+	                       http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-3.1.xsd
+                           http://www.springframework.org/schema/batch http://www.springframework.org/schema/batch/spring-batch-2.1.xsd">
+
+
+    <!-- Properties File -->
+    <context:property-placeholder location="classpath:/auditDataPurgeBatch/audit_purge.properties" />
+
+    <!-- DataSource -->
+	<bean id="dataSource" class="com.mchange.v2.c3p0.ComboPooledDataSource" destroy-method="close">
+        <property name="driverClass" value="oracle.jdbc.OracleDriver" />
+        <property name="jdbcUrl" value="jdbc:oracle:thin:@(DESCRIPTION=(LOAD_BALANCE=ON)(FAILOVER=ON)(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=scan-omni-vdev.gid.gap.com)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=ICMPROCESSRESYNC)))" />
+        <property name="user" value="gidicm" />
+        <property name="password" value="gidicm" />
+        <property name="initialPoolSize" value="10" />
+        <property name="minPoolSize" value="10" />
+        <property name="maxPoolSize" value="50" />
+        <property name="acquireIncrement" value="5" />
+        <property name="numHelperThreads" value="6" />
+        <property name="testConnectionOnCheckin" value="false" />
+        <property name="idleConnectionTestPeriod" value="600" />
+        <!-- ORACLE -->
+        <property name="preferredTestQuery" value="SELECT 1 FROM DUAL" />
+    </bean> 
+    
+    <bean id="jdbcTemplate" class="org.springframework.jdbc.core.JdbcTemplate">
+      <property name="dataSource" ref="dataSource"/>
+    </bean> 
+    
+    <bean id="transactionManager" class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
+	    <property name="dataSource" ref="dataSource"/>
+    </bean>
+    
+  <!-- NOTE: As this job uses multi-threading and parallelism, we MUST use the DB-backed job repo for real runs.  
+         The in-memory one originally tried blows up as it is NOT designed to operate under 
+         these conditions! -->  
+  <batch:job-repository id="jobRepository" isolation-level-for-create="READ_COMMITTED" lob-handler="oracleLobHandler" />
+  <bean id="oracleLobHandler" class="org.springframework.jdbc.support.lob.OracleLobHandler">
+    <property name="nativeJdbcExtractor">
+        <bean id="nativeJdbcExtractor" class="org.springframework.jdbc.support.nativejdbc.C3P0NativeJdbcExtractor"/>
+    </property>
+  </bean>
+  
+  <bean id="jobLauncher" class="org.springframework.batch.core.launch.support.SimpleJobLauncher">
+      <property name="jobRepository" ref="jobRepository" />
+  </bean>
+    
+</beans>
